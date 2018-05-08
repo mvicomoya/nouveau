@@ -21,52 +21,55 @@
  */
 #include "priv.h"
 
+#include <core/memory.h>
 #include <subdev/mmu.h>
 
-#include <nvif/class.h>
+#include <nvif/clb069.h>
 
-static void
-gp100_fault_buffer_fini(struct nvkm_fault_buffer *buffer)
+static int
+nvkm_ufault_map(struct nvkm_object *object, void *argv, u32 argc,
+		enum nvkm_object_map *type, u64 *addr, u64 *size)
 {
+	struct nvkm_fault_buffer *buffer = nvkm_fault_buffer(object);
 	struct nvkm_device *device = buffer->fault->subdev.device;
-	nvkm_mask(device, 0x002a70, 0x00000001, 0x00000000);
+	*type = NVKM_OBJECT_MAP_IO;
+	*addr = device->func->resource_addr(device, 3) + buffer->vma->addr;
+	*size = nvkm_memory_size(buffer->mem);
+	return 0;
 }
 
-static void
-gp100_fault_buffer_init(struct nvkm_fault_buffer *buffer)
+static int
+nvkm_ufault_ntfy(struct nvkm_object *object, u32 type,
+		 struct nvkm_event **pevent)
 {
-	struct nvkm_device *device = buffer->fault->subdev.device;
-	nvkm_wr32(device, 0x002a74, upper_32_bits(buffer->vma->addr));
-	nvkm_wr32(device, 0x002a70, lower_32_bits(buffer->vma->addr));
-	nvkm_mask(device, 0x002a70, 0x00000001, 0x00000001);
+	struct nvkm_fault_buffer *buffer = nvkm_fault_buffer(object);
+	if (type == NVB069_VN_NTFY_FAULT) {
+		*pevent = &buffer->fault->event;
+		return 0;
+	}
+	return -EINVAL;
 }
 
-static u32
-gp100_fault_buffer_entries(struct nvkm_fault_buffer *buffer)
+static void *
+nvkm_ufault_dtor(struct nvkm_object *object)
 {
-	return nvkm_rd32(buffer->fault->subdev.device, 0x002a78);
+	return NULL;
 }
 
-static void
-gp100_fault_intr(struct nvkm_fault *fault)
-{
-	nvkm_event_send(&fault->event, 1, 0, NULL, 0);
-}
-
-static const struct nvkm_fault_func
-gp100_fault = {
-	.intr = gp100_fault_intr,
-	.buffer.nr = 1,
-	.buffer.entry_size = 32,
-	.buffer.entries = gp100_fault_buffer_entries,
-	.buffer.init = gp100_fault_buffer_init,
-	.buffer.fini = gp100_fault_buffer_fini,
-	.user = { { -1, -1, MAXWELL_FAULT_BUFFER_A }, 0 },
+static const struct nvkm_object_func
+nvkm_ufault = {
+	.dtor = nvkm_ufault_dtor,
+	.ntfy = nvkm_ufault_ntfy,
+	.map = nvkm_ufault_map,
 };
 
 int
-gp100_fault_new(struct nvkm_device *device, int index,
-		struct nvkm_fault **pfault)
+nvkm_ufault_new(struct nvkm_device *device, const struct nvkm_oclass *oclass,
+		void *argv, u32 argc, struct nvkm_object **pobject)
 {
-	return nvkm_fault_new_(&gp100_fault, device, index, pfault);
+	struct nvkm_fault *fault = device->fault;
+	struct nvkm_fault_buffer *buffer = fault->buffer[fault->func->user.rp];
+	nvkm_object_ctor(&nvkm_ufault, oclass, &buffer->object);
+	*pobject = &buffer->object;
+	return 0;
 }
